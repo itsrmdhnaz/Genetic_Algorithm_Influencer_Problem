@@ -62,16 +62,19 @@ class Individual:
             )
             
             # Soft constraint: penalty jika melebihi budget
-            # Penalty sangat besar untuk memaksa solusi di bawah budget
+            # Menggunakan metode yang memastikan solusi TIDAK PERNAH melebihi budget
             if self.total_cost > max_budget:
                 overspend = self.total_cost - max_budget
-                # Exponential penalty untuk overspending yang lebih besar
-                self.penalty = penalty_coefficient * (overspend ** 1.5)
+                # Penalty yang sangat besar: menggunakan persentase overspend dengan exponential
+                # Semakin besar overspend, semakin drastis penaltynya
+                overspend_ratio = overspend / max_budget
+                self.penalty = self.total_followers * (1 + overspend_ratio) ** 3
+                # Fitness menjadi sangat negatif jika melebihi budget
+                self.fitness = self.total_followers - self.penalty
             else:
                 self.penalty = 0.0
-            
-            # Fitness = total followers - penalty
-            self.fitness = self.total_followers - self.penalty
+                # Fitness = total followers jika di bawah budget
+                self.fitness = self.total_followers
             
         except Exception as e:
             print(f"Error calculating fitness: {e}")
