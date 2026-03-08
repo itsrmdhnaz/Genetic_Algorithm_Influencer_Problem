@@ -34,6 +34,8 @@ class InfluencerGAApp:
         self.is_running = False
         self.is_paused = False
         self.current_seed = None
+        self.start_time = None
+        self.elapsed_time = 0
         
         # Setup GUI
         self._setup_ui()
@@ -147,12 +149,37 @@ class InfluencerGAApp:
         crossover_combo.grid(row=row, column=1, sticky=tk.W, pady=5)
         row += 1
         
-        # Max Generations
-        ttk.Label(left_frame, text="Max Generations:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        # Stopping Criteria Section
+        ttk.Label(left_frame, text="Stopping Criteria:", font=('Arial', 9, 'bold')).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(10, 5))
+        row += 1
+        
+        # Max Generations Checkbox + Input
+        self.use_max_gen_var = tk.BooleanVar(value=True)
+        max_gen_check = ttk.Checkbutton(left_frame, text="Max Generations:", 
+                                        variable=self.use_max_gen_var)
+        max_gen_check.grid(row=row, column=0, sticky=tk.W, pady=5)
         self.max_gen_var = tk.IntVar(value=100)
-        max_gen_spinbox = ttk.Spinbox(left_frame, from_=1, to=1000, 
+        max_gen_spinbox = ttk.Spinbox(left_frame, from_=1, to=10000, 
                                       textvariable=self.max_gen_var, width=15)
         max_gen_spinbox.grid(row=row, column=1, sticky=tk.W, pady=5)
+        row += 1
+        
+        # Max Time Checkbox + Input
+        self.use_max_time_var = tk.BooleanVar(value=False)
+        max_time_check = ttk.Checkbutton(left_frame, text="Max Time (sec):", 
+                                         variable=self.use_max_time_var)
+        max_time_check.grid(row=row, column=0, sticky=tk.W, pady=5)
+        self.max_time_var = tk.IntVar(value=60)
+        max_time_spinbox = ttk.Spinbox(left_frame, from_=1, to=3600, 
+                                       textvariable=self.max_time_var, width=15)
+        max_time_spinbox.grid(row=row, column=1, sticky=tk.W, pady=5)
+        row += 1
+        
+        # Info label for OR condition
+        info_label = ttk.Label(left_frame, text="(If both checked: stop when either reached)", 
+                              font=('Arial', 8), foreground='gray')
+        info_label.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
         row += 1
         
         # GA Control Buttons
@@ -255,6 +282,38 @@ class InfluencerGAApp:
         table_frame = ttk.LabelFrame(parent, text="Influencer Data", padding="5")
         table_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
         
+        # Search Frame
+        search_frame = ttk.Frame(table_frame)
+        search_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Search Label
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Search Entry
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', lambda *args: self._apply_search())
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=15)
+        search_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Search Field Selector
+        ttk.Label(search_frame, text="in:").pack(side=tk.LEFT, padx=(5, 5))
+        self.search_field_var = tk.StringVar(value="All")
+        search_field_combo = ttk.Combobox(search_frame, textvariable=self.search_field_var,
+                                          values=["All", "Name", "Tarif", "Followers"],
+                                          state='readonly', width=10)
+        search_field_combo.pack(side=tk.LEFT, padx=(0, 5))
+        search_field_combo.bind('<<ComboboxSelected>>', lambda e: self._apply_search())
+        
+        # Clear Search Button
+        clear_search_btn = ttk.Button(search_frame, text="Clear", 
+                                       command=self._clear_search, width=8)
+        clear_search_btn.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Result count label
+        self.result_count_label = ttk.Label(search_frame, text="", 
+                                           font=('Arial', 8), foreground='gray')
+        self.result_count_label.pack(side=tk.RIGHT, padx=(5, 0))
+        
         # Create Treeview
         columns = ('ID', 'Name', 'Tarif (M)', 'Followers')
         self.data_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=15)
@@ -350,6 +409,8 @@ class InfluencerGAApp:
             
             # RESET GA - Generate data baru = restart
             self.ga = None
+            self.start_time = None
+            self.elapsed_time = 0
             
             # Clear/reset all visualizations
             self._clear_visualizations()
@@ -370,15 +431,18 @@ class InfluencerGAApp:
             self._log(f"✗ Error generating data: {e}")
             messagebox.showerror("Error", f"Failed to generate data:\n{e}")
     
-    def _update_data_table(self):
+    def _update_data_table(self, filtered_influencers=None):
         """Update data table with influencer data"""
         try:
             # Clear existing items
             for item in self.data_tree.get_children():
                 self.data_tree.delete(item)
             
+            # Use filtered list if provided, otherwise use all influencers
+            influencers_to_show = filtered_influencers if filtered_influencers is not None else self.influencers
+            
             # Add influencer data (tanpa 'Rp', hanya angka)
-            for inf in self.influencers:
+            for inf in influencers_to_show:
                 tags = ()
                 # Highlight jika influencer dipilih di best solution
                 if self.ga and self.ga.best_individual:
@@ -391,9 +455,104 @@ class InfluencerGAApp:
                     f"{inf.tarif:.2f}",
                     f"{inf.followers:,}"
                 ), tags=tags)
+            
+            # Update result count label
+            total = len(self.influencers) if self.influencers else 0
+            shown = len(influencers_to_show)
+            if shown == total:
+                self.result_count_label.config(text=f"Showing all {total} influencers")
+            else:
+                self.result_count_label.config(text=f"Showing {shown} of {total} influencers")
                 
         except Exception as e:
             self._log(f"✗ Error updating data table: {e}")
+    
+    def _apply_search(self):
+        """Apply search filter to influencer data"""
+        try:
+            if not self.influencers:
+                return
+            
+            search_query = self.search_var.get().strip().lower()
+            search_field = self.search_field_var.get()
+            
+            # If empty search, show all
+            if not search_query:
+                self._update_data_table()
+                return
+            
+            # Filter influencers based on search query and field
+            filtered = []
+            for inf in self.influencers:
+                match = False
+                
+                if search_field == "All":
+                    # Search in all fields
+                    if (search_query in inf.name.lower() or
+                        search_query in str(inf.tarif) or
+                        search_query in str(inf.followers)):
+                        match = True
+                        
+                elif search_field == "Name":
+                    if search_query in inf.name.lower():
+                        match = True
+                        
+                elif search_field == "Tarif":
+                    # Support both exact and range search for tarif
+                    try:
+                        # Try exact match
+                        if search_query in str(inf.tarif):
+                            match = True
+                        # Try range match (e.g., ">5" or "<3")
+                        elif search_query.startswith('>'):
+                            threshold = float(search_query[1:])
+                            if inf.tarif > threshold:
+                                match = True
+                        elif search_query.startswith('<'):
+                            threshold = float(search_query[1:])
+                            if inf.tarif < threshold:
+                                match = True
+                    except ValueError:
+                        # If not a valid number, do string match
+                        if search_query in str(inf.tarif):
+                            match = True
+                            
+                elif search_field == "Followers":
+                    # Support both exact and range search for followers
+                    try:
+                        # Try string match first
+                        if search_query in str(inf.followers):
+                            match = True
+                        # Try range match (e.g., ">100000" or "<50000")
+                        elif search_query.startswith('>'):
+                            threshold = int(search_query[1:])
+                            if inf.followers > threshold:
+                                match = True
+                        elif search_query.startswith('<'):
+                            threshold = int(search_query[1:])
+                            if inf.followers < threshold:
+                                match = True
+                    except ValueError:
+                        # If not a valid number, do string match
+                        if search_query in str(inf.followers):
+                            match = True
+                
+                if match:
+                    filtered.append(inf)
+            
+            # Update table with filtered results
+            self._update_data_table(filtered)
+            
+        except Exception as e:
+            print(f"Error applying search: {e}")
+    
+    def _clear_search(self):
+        """Clear search filter"""
+        try:
+            self.search_var.set("")
+            self._update_data_table()
+        except Exception as e:
+            print(f"Error clearing search: {e}")
     
     def _run_ga(self):
         """Run genetic algorithm"""
@@ -406,13 +565,22 @@ class InfluencerGAApp:
                 messagebox.showwarning("Warning", "Please generate data first!")
                 return
             
+            # Validate stopping criteria
+            use_max_gen = self.use_max_gen_var.get()
+            use_max_time = self.use_max_time_var.get()
+            
+            if not use_max_gen and not use_max_time:
+                messagebox.showerror("Error", "Please select at least one stopping criteria!")
+                return
+            
             # Get parameters
             pop_size = self.pop_size_var.get()
             mutation_rate = self.mutation_rate_var.get()
             elitism_count = self.elitism_var.get()
             budget = self.budget_var.get()
             crossover_type = self.crossover_var.get()
-            max_generations = self.max_gen_var.get()
+            max_generations = self.max_gen_var.get() if use_max_gen else float('inf')
+            max_time = self.max_time_var.get() if use_max_time else float('inf')
             
             # Validate
             if elitism_count >= pop_size:
@@ -426,7 +594,15 @@ class InfluencerGAApp:
             self._log(f"Elitism Count: {elitism_count}")
             self._log(f"Budget: Rp {budget} Juta")
             self._log(f"Crossover Type: {crossover_type}")
-            self._log(f"Max Generations: {max_generations}")
+            
+            # Log stopping criteria
+            if use_max_gen and use_max_time:
+                self._log(f"Stopping: Max {max_generations} generations OR {max_time} seconds")
+            elif use_max_gen:
+                self._log(f"Stopping: Max {max_generations} generations")
+            elif use_max_time:
+                self._log(f"Stopping: Max {max_time} seconds")
+            
             self._log(f"Seed: {self.current_seed}")
             self._log("=" * 50)
             
@@ -445,13 +621,17 @@ class InfluencerGAApp:
             self.ga.initialize_population()
             self._log("✓ Population initialized")
             
+            # Reset timer
+            self.start_time = time.time()
+            self.elapsed_time = 0
+            
             # Update UI state
             self.is_running = True
             self.is_paused = False
             self._update_button_states()
             
             # Start GA in separate thread
-            ga_thread = threading.Thread(target=self._ga_worker, args=(max_generations,), daemon=True)
+            ga_thread = threading.Thread(target=self._ga_worker, args=(max_generations, max_time), daemon=True)
             ga_thread.start()
             
         except Exception as e:
@@ -460,24 +640,47 @@ class InfluencerGAApp:
             self.is_running = False
             self._update_button_states()
     
-    def _ga_worker(self, max_generations: int):
+    def _ga_worker(self, max_generations: int, max_time: float):
         """Worker thread for running GA"""
         try:
-            for gen in range(max_generations):
+            generation_count = 0
+            while True:
                 # Check if stopped
                 if not self.is_running:
                     self._log("GA stopped by user")
                     break
                 
                 # Check if paused
+                pause_start = None
                 while self.is_paused and self.is_running:
+                    if pause_start is None:
+                        pause_start = time.time()
                     time.sleep(0.1)
+                
+                # Adjust start_time for pause duration
+                if pause_start is not None:
+                    pause_duration = time.time() - pause_start
+                    self.start_time += pause_duration
                 
                 if not self.is_running:
                     break
                 
+                # Check stopping criteria
+                self.elapsed_time = time.time() - self.start_time
+                
+                # Stop if max generations reached
+                if generation_count >= max_generations:
+                    self._log(f"✓ Reached max generations: {max_generations}")
+                    break
+                
+                # Stop if max time reached
+                if self.elapsed_time >= max_time:
+                    self._log(f"✓ Reached max time: {max_time:.1f} seconds")
+                    break
+                
                 # Evolve one generation
                 stats = self.ga.evolve()
+                generation_count += 1
                 
                 # Update UI
                 self.root.after(0, self._update_ui_after_generation, stats)
@@ -498,14 +701,20 @@ class InfluencerGAApp:
     def _update_ui_after_generation(self, stats: dict):
         """Update UI after each generation"""
         try:
+            # Update elapsed time
+            if self.start_time:
+                self.elapsed_time = time.time() - self.start_time
+            
             # Log every 10 generations or if it's the first generation
             gen = stats['generation']
             if gen == 1 or gen % 10 == 0:
+                time_str = f"{self.elapsed_time:.1f}s" if self.elapsed_time < 60 else f"{self.elapsed_time/60:.1f}min"
                 self._log(f"Gen {gen:3d}: "
                          f"Best Fitness={stats['best_fitness']:,.0f}, "
                          f"Avg={stats['avg_fitness']:,.0f}, "
                          f"Cost=Rp{stats['best_cost']:.2f}M, "
-                         f"Followers={stats['best_followers']:,}")
+                         f"Followers={stats['best_followers']:,}, "
+                         f"Time={time_str}")
             
             # Update visualization
             self._update_visualization()
@@ -607,14 +816,20 @@ class InfluencerGAApp:
             selected_count = sum(chromosome)
             budget = self.budget_var.get()
             cost = self.ga.best_individual.total_cost
+            followers = self.ga.best_individual.total_followers
             budget_status = "✓ Within Budget" if cost <= budget else "✗ Over Budget"
             
-            title = f'Kromosom Visualization - Generation {gen}\n'
+            # Format time
+            elapsed = self.elapsed_time if self.elapsed_time > 0 else 0
+            time_str = f"{elapsed:.1f}s" if elapsed < 60 else f"{elapsed/60:.1f}m"
+            
+            title = f'Kromosom Visualization - Generation {gen} | Time: {time_str}\n'
             title += f'Selected: {selected_count}/{n_influencers} | '
+            title += f'Followers: {followers:,} | '
             title += f'Cost: Rp {cost:.2f}M / Rp {budget:.2f}M | '
             title += f'{budget_status}'
             
-            self.ax.set_title(title, fontsize=11, fontweight='bold', pad=15)
+            self.ax.set_title(title, fontsize=10, fontweight='bold', pad=15)
             
             # Remove axes
             self.ax.set_xticks([])
@@ -649,11 +864,22 @@ class InfluencerGAApp:
         try:
             selected = individual.get_selected_influencers()
             
+            # Format elapsed time
+            if self.elapsed_time < 60:
+                time_str = f"{self.elapsed_time:.2f} seconds"
+            elif self.elapsed_time < 3600:
+                time_str = f"{self.elapsed_time/60:.2f} minutes"
+            else:
+                time_str = f"{self.elapsed_time/3600:.2f} hours"
+            
+            budget = self.budget_var.get()
+            
             details = f"""╔══════════════════════════════════════════╗
 ║         BEST SOLUTION DETAILS            ║
 ╚══════════════════════════════════════════╝
 
 Generation: {generation}
+Elapsed Time: {time_str}
 Seed: {self.current_seed if self.current_seed else 'None'}
 
 ═══════════════════════════════════════════
@@ -670,8 +896,8 @@ SOLUTION METRICS:
 Total Influencers Selected: {len(selected)}
 Total Followers: {individual.total_followers:,}
 Total Cost: Rp {individual.total_cost:.2f} Juta
-Budget: Rp 50.00 Juta
-Budget Used: {(individual.total_cost/50.0)*100:.1f}%
+Budget: Rp {budget:.2f} Juta
+Budget Used: {(individual.total_cost/budget)*100:.1f}%
 Fitness Score: {individual.fitness:,.0f}
 Penalty: {individual.penalty:,.0f}
 
@@ -726,8 +952,17 @@ SELECTED INFLUENCERS:
             self.is_paused = False
             self._update_button_states()
             
+            # Format elapsed time
+            if self.elapsed_time < 60:
+                time_str = f"{self.elapsed_time:.2f} seconds"
+            elif self.elapsed_time < 3600:
+                time_str = f"{self.elapsed_time/60:.2f} minutes"
+            else:
+                time_str = f"{self.elapsed_time/3600:.2f} hours"
+            
             self._log("=" * 50)
             self._log("✓ GA COMPLETED SUCCESSFULLY!")
+            self._log(f"Total Time: {time_str}")
             self._log("=" * 50)
             
             if self.ga and self.ga.best_individual:
@@ -738,7 +973,7 @@ SELECTED INFLUENCERS:
                 self._log(f"  Fitness: {best.fitness:,.0f}")
                 self._log(f"  Influencers Selected: {len(best.get_selected_influencers())}")
                 
-            messagebox.showinfo("Success", "Genetic Algorithm completed successfully!")
+            messagebox.showinfo("Success", f"Genetic Algorithm completed successfully!\nTime: {time_str}")
             
         except Exception as e:
             self._log(f"✗ Error in completion handler: {e}")
@@ -790,12 +1025,30 @@ SELECTED INFLUENCERS:
                 self._log("GA is already running!")
                 return
             
-            # Get additional generations
-            additional_gens = self.max_gen_var.get()
+            # Validate stopping criteria
+            use_max_gen = self.use_max_gen_var.get()
+            use_max_time = self.use_max_time_var.get()
+            
+            if not use_max_gen and not use_max_time:
+                messagebox.showerror("Error", "Please select at least one stopping criteria!")
+                return
+            
+            # Get additional criteria
+            additional_gens = self.max_gen_var.get() if use_max_gen else float('inf')
+            additional_time = self.max_time_var.get() if use_max_time else float('inf')
             
             self._log("=" * 50)
-            self._log(f"Continuing GA for {additional_gens} more generations...")
+            if use_max_gen and use_max_time:
+                self._log(f"Continuing GA for {additional_gens} gens OR {additional_time} seconds...")
+            elif use_max_gen:
+                self._log(f"Continuing GA for {additional_gens} more generations...")
+            elif use_max_time:
+                self._log(f"Continuing GA for {additional_time} more seconds...")
             self._log("=" * 50)
+            
+            # Reset timer for continue
+            self.start_time = time.time()
+            self.elapsed_time = 0
             
             # Update UI state
             self.is_running = True
@@ -803,7 +1056,7 @@ SELECTED INFLUENCERS:
             self._update_button_states()
             
             # Start GA in separate thread
-            ga_thread = threading.Thread(target=self._ga_worker, args=(additional_gens,), daemon=True)
+            ga_thread = threading.Thread(target=self._ga_worker, args=(additional_gens, additional_time), daemon=True)
             ga_thread.start()
             
         except Exception as e:
@@ -823,29 +1076,22 @@ SELECTED INFLUENCERS:
     def _clear_visualizations(self):
         """Clear all visualizations/graphs"""
         try:
-            # Clear all axes
-            self.ax1.clear()
-            self.ax2.clear()
-            self.ax3.clear()
+            # Clear the single axis
+            self.ax.clear()
             
-            # Reset titles and labels
-            self.ax1.set_title('Fitness Evolution', fontsize=10)
-            self.ax1.set_xlabel('Generation', fontsize=8)
-            self.ax1.set_ylabel('Fitness', fontsize=8)
-            self.ax1.grid(True, alpha=0.3)
-            self.ax1.tick_params(labelsize=7)
+            # Reset to initial empty state
+            self.ax.set_title('Kromosom Visualization - Influencer Selection', fontsize=12, fontweight='bold')
+            self.ax.set_xlabel('', fontsize=9)
+            self.ax.set_ylabel('Influencer', fontsize=10)
             
-            self.ax2.set_title('Best Solution Metrics', fontsize=10)
-            self.ax2.set_xlabel('Generation', fontsize=8)
-            self.ax2.set_ylabel('Value', fontsize=8)
-            self.ax2.grid(True, alpha=0.3)
-            self.ax2.tick_params(labelsize=7)
+            # Show placeholder message
+            self.ax.text(0.5, 0.5, 'No solution yet.\nRun GA to see visualization.', 
+                        ha='center', va='center', fontsize=12, transform=self.ax.transAxes)
+            self.ax.set_xlim(0, 10)
+            self.ax.set_ylim(0, 10)
+            self.ax.axis('off')
             
-            self.ax3.set_title('Kromosom (Best Solution)', fontsize=10)
-            self.ax3.set_ylabel('Influencer ID', fontsize=8)
-            self.ax3.tick_params(labelsize=7)
-            
-            # Draw empty canvas
+            # Draw canvas
             self.fig.tight_layout()
             self.canvas.draw()
             
